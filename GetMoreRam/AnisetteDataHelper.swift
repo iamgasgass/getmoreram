@@ -42,11 +42,11 @@ final class AnisetteDataHelper
     func getAnisetteData(refresh: Bool = false) async throws -> AnisetteData
     {
         
-        if url == nil {
-            throw "No Anisette Server Found!"
+        try updateServerURLFromPreferences()
+        guard let serverURL = url else {
+            throw "No valid Anisette Server URL is configured. Open Settings and enter a valid HTTPS URL."
         }
-        
-        self.printOut("Anisette URL: \(self.url!.absoluteString)")
+        self.printOut("Anisette URL: \(serverURL.absoluteString)")
         
         let ans : AnisetteData
         if let identifier = Keychain.shared.identifier,
@@ -335,86 +335,100 @@ final class AnisetteDataHelper
     
     // MARK: - V3: FETCHING
     
+    /// Synchronizes the URL edited in Settings with the helper. The previous
+    /// implementation only read the preference at app startup, so editing the
+    /// server field could leave requests pointed at the old host.
+    private func updateServerURLFromPreferences() throws {
+        let rawValue = UserDefaults.standard.string(forKey: "AnisetteServer") ?? "https://ani.jkcoxson.com"
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let components = URLComponents(string: trimmed),
+              let scheme = components.scheme?.lowercased(),
+              ["https", "http"].contains(scheme),
+              let host = components.host, !host.isEmpty,
+              let configuredURL = components.url else {
+            throw "Invalid Anisette Server URL. Use a full URL such as https://ani.jkcoxson.com."
+        }
+
+        if self.url?.absoluteString != configuredURL.absoluteString {
+            self.url = configuredURL
+            resetClientInfo()
+            self.printOut("Anisette server changed; cleared cached client identity")
+        }
+    }
+
     func fetchClientInfo() async throws {
-        if  self.clientInfo != nil &&
-                self.userAgent != nil &&
-                self.mdLu != nil &&
-                self.deviceId != nil &&
-                Keychain.shared.identifier != nil {
-            self.printOut("Skipping client_info fetch since all the properties we need aren't nil")
+        if self.clientInfo != nil && self.userAgent != nil &&
+            self.mdLu != nil && self.deviceId != nil && Keychain.shared.identifier != nil {
+            self.printOut("Using cached Anisette client identity for the configured server")
             return
         }
-        
-        self.printOut("Using custom client_info")
-                        
-        self.clientInfo = "<iMac18,3> <macOS;27.0;26A5378j> <com.apple.AuthKit/1 (com.apple.akd/1.0)>"
-        self.userAgent = "AuthKit/1 (Macintosh; OS X 27.0) (com.apple.akd/1.0)"
-        self.printOut("Client-Info: \(self.clientInfo!)")
-        self.printOut("User-Agent: \(self.userAgent!)")
-        
+
+        guard let serverURL = self.url else {
+            throw "No Anisette Server Found!"
+        }
+
+        // The client identity must match the server that generated Anisette.
+        // Do not hard-code a Mac identity for a Windows Anisette endpoint.
+        let clientInfoURL = serverURL.appendingPathComponent("v3").appendingPathComponent("client_info")
+        var request = URLRequest(url: clientInfoURL)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 15
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200..<300).contains(httpResponse.statusCode) else {
+            let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+            self.printOut("Anisette client_info endpoint returned HTTP \(status)")
+            throw "Unable to read client_info from the configured Anisette server (HTTP \(status)). Check the server URL and try a compatible Anisette v3 server."
+        }
+
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: String],
+              let clientInfo = json["client_info"], !clientInfo.isEmpty,
+              let userAgent = json["user_agent"], !userAgent.isEmpty else {
+            self.printOut("Anisette client_info response was missing client_info or user_agent")
+            throw "The configured Anisette server did not return valid v3 client_info and user_agent values."
+        }
+
+        // SideStore-style client identity overrides. Empty/disabled overrides
+        // keep the identity advertised by the selected Anisette server.
+        let defaults = UserDefaults.standard
+        let customClientInfo = defaults.string(forKey: "AnisetteCustomClientInfo")?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let customUserAgent = defaults.string(forKey: "AnisetteCustomUserAgent")?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let useCustomClientInfo = defaults.bool(forKey: "AnisetteUseCustomClientInfo")
+        let useCustomUserAgent = defaults.bool(forKey: "AnisetteUseCustomUserAgent")
+
+        self.clientInfo = useCustomClientInfo && !customClientInfo.isEmpty
+            ? customClientInfo : clientInfo
+        self.userAgent = useCustomUserAgent && !customUserAgent.isEmpty
+            ? customUserAgent : userAgent
+        self.printOut("Loaded Anisette identity from configured server")
+        self.printOut("Client-Info source: \(useCustomClientInfo && !customClientInfo.isEmpty ? "custom override" : "server default")")
+        self.printOut("User-Agent source: \(useCustomUserAgent && !customUserAgent.isEmpty ? "custom override" : "server default")")
+        self.printOut("Client-Info: \(self.clientInfo ?? "")")
+        self.printOut("User-Agent: \(self.userAgent ?? "")")
+
         if Keychain.shared.identifier == nil {
             self.printOut("Generating identifier")
             var bytes = [Int8](repeating: 0, count: 16)
             let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
-            
-            if status != errSecSuccess {
+            guard status == errSecSuccess else {
                 self.printOut("ERROR GENERATING IDENTIFIER!!! \(status)")
                 throw "Couldn't generate identifier"
             }
-            
             Keychain.shared.identifier = Data(bytes: &bytes, count: bytes.count).base64EncodedString()
         }
-        
-        let decoded = Data(base64Encoded: Keychain.shared.identifier!)!
+
+        guard let identifier = Keychain.shared.identifier,
+              let decoded = Data(base64Encoded: identifier), decoded.count == 16 else {
+            Keychain.shared.identifier = nil
+            throw "The saved Anisette identifier is invalid. Tap Clean Up Keychain and try again."
+        }
         self.mdLu = decoded.sha256().hexEncodedString()
-        self.printOut("X-Apple-I-MD-LU: \(self.mdLu!)")
         let uuid: UUID = decoded.object()
         self.deviceId = uuid.uuidString.uppercased()
-        self.printOut("X-Mme-Device-Id: \(self.deviceId!)")
-
-        // Client info on Anisette Servers are out of date for latest GSA
-        /*
-        let clientInfoURL = self.url!.appendingPathComponent("v3").appendingPathComponent("client_info")
-        
-        let (data, response) = try await URLSession.shared.data(from: clientInfoURL)
-        
-
-            do {
-                
-                if let json = try JSONSerialization.jsonObject(with: data, options: []) as? [String: String] {
-                    if let clientInfo = json["client_info"] {
-                        self.printOut("Server is V3")
-                        
-                        self.clientInfo = clientInfo
-                        self.userAgent = json["user_agent"]!
-                        self.printOut("Client-Info: \(self.clientInfo!)")
-                        self.printOut("User-Agent: \(self.userAgent!)")
-                        
-                        if Keychain.shared.identifier == nil {
-                            self.printOut("Generating identifier")
-                            var bytes = [Int8](repeating: 0, count: 16)
-                            let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
-                            
-                            if status != errSecSuccess {
-                                self.printOut("ERROR GENERATING IDENTIFIER!!! \(status)")
-                                throw "Couldn't generate identifier"
-                            }
-                            
-                            Keychain.shared.identifier = Data(bytes: &bytes, count: bytes.count).base64EncodedString()
-                        }
-                        
-                        let decoded = Data(base64Encoded: Keychain.shared.identifier!)!
-                        self.mdLu = decoded.sha256().hexEncodedString()
-                        self.printOut("X-Apple-I-MD-LU: \(self.mdLu!)")
-                        let uuid: UUID = decoded.object()
-                        self.deviceId = uuid.uuidString.uppercased()
-                        self.printOut("X-Mme-Device-Id: \(self.deviceId!)")
-                        
-                        return
-                    } else { throw "v1 server is not supported" }
-                } else { throw "Couldn't fetch client info. The returned data may not be in JSON" }
-            }
-        */
+        self.printOut("Anisette identity identifiers initialized")
     }
     
     func fetchAnisetteV3(_ identifier: String, _ adiPb: String) async throws -> AnisetteData {
