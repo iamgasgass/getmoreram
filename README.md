@@ -55,3 +55,8 @@ The GitHub Actions build workflow applies this patch automatically. This reposit
 When **Add Increased Memory Limit** is pressed, the app now prints a structured diagnostic block to the Xcode console and the in-app Server Response panel. It records the App ID resource, bundle identifier, team ID, requested Developer Services capability (`INCREASED_MEMORY_LIMIT`), the associated entitlement key (`com.apple.developer.kernel.increased-memory-limit`), and the current `features`/`entitlements` values exposed by the StosSign model. Success and failure are logged separately, including the detailed error on failure.
 
 Important distinction: `INCREASED_MEMORY_LIMIT` is the Developer Services capability identifier sent in the API request; `com.apple.developer.kernel.increased-memory-limit` is the entitlement key associated with the capability. The current StosSign `AppID` model initializes `entitlements` as an empty array and does not decode the final signed app entitlements, so the log explicitly labels that field as model data rather than claiming it reflects the signed binary. Verify the final provisioning profile and signed app separately when needed.
+
+## App identity and appearance
+
+- App bundle identifier: `com.iamgasgass.getmoreram` (Debug and Release).
+- The shared `AppGlassBackground` uses a near-black graphite palette so Liquid Glass surfaces remain subtle against a darker background.

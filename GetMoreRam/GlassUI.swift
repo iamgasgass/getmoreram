@@ -17,9 +17,11 @@ struct AppGlassBackground: View {
                 Color.black
 
                 LinearGradient(
+                    // Near-black graphite gradient keeps the native glass
+                    // readable without washing the screen into grey.
                     colors: [
-                        Color(red: 0.19, green: 0.20, blue: 0.22),
-                        Color(red: 0.075, green: 0.085, blue: 0.105),
+                        Color(red: 0.035, green: 0.038, blue: 0.045),
+                        Color(red: 0.012, green: 0.014, blue: 0.018),
                         Color.black
                     ],
                     startPoint: .topLeading,
@@ -27,19 +29,19 @@ struct AppGlassBackground: View {
                 )
 
                 Circle()
-                    .fill(Color(red: 0.72, green: 0.78, blue: 0.86).opacity(0.16))
+                    .fill(Color(red: 0.72, green: 0.78, blue: 0.86).opacity(0.045))
                     .frame(width: proxy.size.width * 0.78)
                     .blur(radius: 100)
                     .offset(x: proxy.size.width * 0.42, y: -proxy.size.height * 0.34)
 
                 Circle()
-                    .fill(Color.white.opacity(0.075))
+                    .fill(Color.white.opacity(0.022))
                     .frame(width: proxy.size.width * 0.66)
                     .blur(radius: 90)
                     .offset(x: -proxy.size.width * 0.50, y: proxy.size.height * 0.10)
 
                 LinearGradient(
-                    colors: [.clear, Color.black.opacity(0.54)],
+                    colors: [.clear, Color.black.opacity(0.78)],
                     startPoint: .center,
                     endPoint: .bottom
                 )
